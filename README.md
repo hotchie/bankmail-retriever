@@ -1,0 +1,1 @@
+Playwright script to retrieve bankmail from Bankwest online account
