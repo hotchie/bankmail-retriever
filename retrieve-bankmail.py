@@ -14,6 +14,7 @@ from logging import Logger
 import argparse
 import coloredlogs
 import verboselogs
+from getpass import getpass
 from playwright.async_api import async_playwright, Page
 from dotenv import load_dotenv
 
@@ -87,6 +88,25 @@ coloredlogs.install(level=LOG_LEVEL, logger=logger)
 
 logger.debug('settings log level to %s', LOG_LEVEL)
 
+def get_credentials():
+    # Get credentials from environment variables
+    pan = os.getenv('PAN')
+    password = os.getenv('PASSWORD')
+
+    if not pan or not password:
+        logger.warning('no credentials in environment')
+        pan = input('Enter your Bankwest PAN: ')
+        password = getpass('Enter your Bankwest online banking password: ')
+
+    if not pan or not password:
+        logger.critical('Unable to log into online banking without a PAN and password')
+        sys.exit(1)
+
+    return {
+        'pan': pan,
+        'password': password
+    }
+
 async def login(page: Page, pan: str, password: str):
     """Perform login to Bankwest Online Banking"""
     logger.verbose(f'loading {LOGIN_PAGE}')
@@ -139,11 +159,9 @@ async def login_and_scrape_bank_messages():
         context = await browser.new_context()
         page = await context.new_page()
 
-        # Get credentials from environment variables
-        pan = os.getenv('PAN')
-        password = os.getenv('PASSWORD')
+        credentials = get_credentials()
 
-        await login(page, pan, password)
+        await login(page, credentials.get('pan'), credentials.get('password'))
 
         await go_to_mail_page(page)
 
