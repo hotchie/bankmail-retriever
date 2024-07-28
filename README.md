@@ -23,13 +23,13 @@ Go to the project directory
   cd bankmail-retriever
 ```
 
-Create credentials file
+(Optionally) Create credentials file
 
 ```bash
   touch .env
 ```
 
-Add your PAN and online banking password to the credentials file
+(Optionally) Add your PAN and online banking password to the credentials file
 
 ```bash
   echo PAN=<your-pan> >> .env
@@ -37,6 +37,8 @@ Add your PAN and online banking password to the credentials file
 ```
 
 Or you can open the file and enter them manually so they don't appear in your command line history
+
+The script will prompt for credentials if they can't be found
 
 Run the script with the desired options
 
