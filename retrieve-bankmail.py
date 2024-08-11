@@ -6,16 +6,17 @@ Usage: retrieve-bankmail.py [OPTIONS]
 Retrieve bankmail from Bankwest Online Banking
 """
 
+import os
 import sys
 import asyncio
-import os
 import logging
 from logging import Logger
+from getpass import getpass
 import argparse
 import coloredlogs
 import verboselogs
-from getpass import getpass
-from playwright.async_api import async_playwright, Page
+import keyring as kr
+from playwright.async_api import async_playwright, Page, TimeoutError
 from dotenv import load_dotenv
 
 class BankMessage():
@@ -46,6 +47,15 @@ class BankMessage():
         self._logger.info("Date: %s", self.date)
         self._logger.info("Content: %s", self.content)
 
+class Credential():
+    """Class representing a Login Credential"""
+    pan: str
+    password: str
+
+    def __init__(self, pan, password):
+        self.pan = pan
+        self.password = password
+
 
 # Load environment variables from a .env file (if using dotenv)
 load_dotenv()
@@ -65,6 +75,10 @@ LOG_LEVEL = 'INFO'
 LOGIN_PAGE = 'https://ibs.bankwest.com.au/Session/PersonalLogin'
 MAIL_PAGE = 'https://ibs.bankwest.com.au/SecureMailWeb/MailPage.aspx?app=cm'
 MESSAGE_PAGE = 'https://ibs.bankwest.com.au/SecureMailWeb/ReadMailPage.aspx?msgid=%s&status=R'
+
+SERVICE_NAME = 'retrieve-bankmail'
+UN = 'PAN'
+PW = 'PASSWORD'
 
 parser = argparse.ArgumentParser(description='')
 parser.add_argument('-v', '--verbose', action='store_true', help='verbose logging')
@@ -88,43 +102,68 @@ coloredlogs.install(level=LOG_LEVEL, logger=logger)
 
 logger.debug('settings log level to %s', LOG_LEVEL)
 
-def get_credentials():
-    # Get credentials from environment variables
-    pan = os.getenv('PAN')
-    password = os.getenv('PASSWORD')
-
-    if not pan or not password:
-        logger.warning('no credentials in environment')
-        pan = input('Enter your Bankwest PAN: ')
+def get_password():
+    while True:
         password = getpass('Enter your Bankwest online banking password: ')
+        confirm = input('Are you happy with the password you entered? [y]es or [n]o: ')
+        if confirm.strip().lower()[:1] == 'y':
+            return password
 
-    if not pan or not password:
+def get_credentials():
+    """Set the credentials if necessary"""
+
+    pan = kr.get_password(SERVICE_NAME, UN)
+
+    if not pan:
+        pan = os.getenv(UN)
+
+    if not pan:
+        logger.warning('no credentials available')
+        pan = input('Enter your Bankwest PAN: ')
+
+    pw = kr.get_password(SERVICE_NAME, f'{UN}_{pan}')
+
+    if not pw:
+        logger.warning('no password in keychain for the pan provided')
+        pw = get_password()
+
+        # Store a credential in keychain
+        kr.set_password(SERVICE_NAME, f'{UN}_{pan}', pw)
+
+    if not pan or not pw:
         logger.critical('Unable to log into online banking without a PAN and password')
         sys.exit(1)
 
-    return {
-        'pan': pan,
-        'password': password
-    }
+    return Credential(pan, pw)
 
-async def login(page: Page, pan: str, password: str):
+def reset_credentials(creds: Credential):
+    kr.delete_password(SERVICE_NAME, f'{UN}_{creds.pan}')
+    kr.delete_password(SERVICE_NAME, UN)
+
+async def login(page: Page):
     """Perform login to Bankwest Online Banking"""
     logger.verbose(f'loading {LOGIN_PAGE}')
     # Navigate to the login page
     await page.goto(LOGIN_PAGE)
 
+    creds = get_credentials()
+
     # Enter username
-    await page.fill('input[name="PAN"]', pan)
+    await page.fill('input[name="PAN"]', creds.pan)
 
     # Enter password
-    await page.fill('input[name="Password"]', password)
+    await page.fill('input[name="Password"]', creds.password)
 
     # Click the login button
     await page.click('button[name="button"]')
 
     # Wait for navigation to complete (adjust as necessary for your bank's site)
     logger.verbose('waiting for page to load')
-    await page.wait_for_selector('.logoutButton')
+    try:
+        await page.wait_for_selector('.logoutButton')
+    except TimeoutError as _:
+        reset_credentials(creds)
+        login(page)
 
 async def go_to_mail_page(page: Page):
     """Navigate to the messages page"""
@@ -154,14 +193,13 @@ async def get_message_content(message: BankMessage, page: Page) -> str:
 
 async def login_and_scrape_bank_messages():
     """The main function that logs into BOB and grabs your bankmail messages"""
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=not args.show_browser)
         context = await browser.new_context()
         page = await context.new_page()
 
-        credentials = get_credentials()
-
-        await login(page, credentials.get('pan'), credentials.get('password'))
+        await login(page)
 
         await go_to_mail_page(page)
 
